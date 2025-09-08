@@ -1,5 +1,6 @@
 package dbis.stark.dbscan
 
+import dbis.stark.dbscan.internal_dbscan.DBSCANGrid
 import org.apache.log4j.LogManager
 import org.apache.spark.mllib.linalg.Vector
 import org.apache.spark.rdd._
@@ -105,7 +106,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
    * @param input the input RDD consisting of Vectors (of an arbitrary number of dimensions)
    * @return a clustering model containing the objects with their cluster id as label
    */
-  private def performClustering(input: RDD[ClusterPoint[K,T]], globalMBB: MBB): DBScanModel[K,T] = {
+  private def performClustering(input: RDD[ClusterPoint[K, T]], globalMBB: MBB): DBScanModel[K, T] = {
     /*
      * step 1: determine the optimal partitioning, i.e. a list of MBBs describing the
      *         partitions in the n-dimensional space and send it around as broadcast
@@ -139,7 +140,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
     val clusterSets = mappedPoints.groupBy(k => k._1) //FIXME reduceByKey?
     // TODO: try .repartition(partitionMBBs.length)
     val clusterResults = clusterSets.mapPartitions(iter => applyLocalDBScan(iter, broadcastMBBs.value), preservesPartitioning = true)
-    val clusteredData = clusterResults.flatMap{case (_, x) => x}
+    val clusteredData = clusterResults.flatMap { case (_, x) => x }
 
     /*
      * we need the data twice, so let's cache them.
@@ -165,7 +166,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
      * and derive a mapping for cluster ids: if there exist a point appearing multiple times
      * with different cluster ids we have to add it to the map
      */
-    val clusterPairs = clusterGroups.mapPartitions{ iter => buildClusterPairs(iter)}
+    val clusterPairs = clusterGroups.mapPartitions { iter => buildClusterPairs(iter) }
       //      .coalesce(1, shuffle = true)
       //      .collect
       .distinct
@@ -189,12 +190,12 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
      *         points
      */
     logger.info("step 6: compute the final clustering")
-    val finalClustering = clusteredData.filter(! _.isMerge)
+    val finalClustering = clusteredData.filter(!_.isMerge)
       .union(mergedPoints)
       /*
        * step 7: we translate the cluster id of all points according the global map
        */
-      .map{ point => mapClusterId(point, broadcastMapping.value) }
+      .map { point => mapClusterId(point, broadcastMapping.value) }
 
     /*
      * step 8: finally, we construct a clustering model
@@ -355,7 +356,8 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
         seeds ++= pp.filter(n => n.label == ClusterLabel.Unclassified)
         // .. and assign them to our cluster
         pp.foreach(n => {
-          n.clusterId = clusterID; n.label = ClusterLabel.Reachable
+          n.clusterId = clusterID;
+          n.label = ClusterLabel.Reachable
         })
       }
       // done with o, continue ...
@@ -386,6 +388,47 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
     })
     // the points are assigned to clusters now
     points
+  }
+
+  private def hashIdToLong(id: K): Long = {
+    id.toString.hashCode.toLong
+  }
+
+  protected[dbscan] def localDBScanGrid(points: Stream[ClusterPoint[K, T]], startId: Int): Stream[ClusterPoint[K, T]] = {
+    val pointsMap = points.map(p => {
+      val longId = hashIdToLong(p.id)
+      (longId -> p)
+    }).toMap
+
+    val pointsArray = points.map { p =>
+      val longId = hashIdToLong(p.id)
+      dbis.stark.dbscan.internal_dbscan.Point(p.vec.toArray.map(_.toFloat), longId)
+    }.toArray
+
+    val dbscan = new DBSCANGrid(epsilon = eps.toFloat, minPts = minPts)
+    val (labels, clusteredPoints) = dbscan.fit(pointsArray)
+    val corePoints = dbscan.getCorePoints.flatten.toSet
+
+    val clusterPoints = {
+      for (i <- clusteredPoints.indices) yield {
+        val p = clusteredPoints(i)
+        val originalPoint = pointsMap(p.id)
+        val clusterId = labels(i)
+        val (label, mappedClusterId) = if (clusterId > 0) {
+          if (corePoints.contains(p)) {
+            (ClusterLabel.Core, clusterId + startId + 1)
+          } else {
+            (ClusterLabel.Reachable, clusterId + startId + 1)
+          }
+        } else {
+          (ClusterLabel.Noise, 0)
+        }
+        originalPoint.label = label
+        originalPoint.clusterId = mappedClusterId
+        ClusterPoint(originalPoint, pload = originalPoint.payload, merge = originalPoint.isMerge)
+      }
+    }
+    clusterPoints.to(Stream)
   }
 
   /**
@@ -469,8 +512,10 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
   protected[dbscan] def computeGlobalMapping(pairs: Array[(Int, Int)]): Map[Int, Int] = {
     // a helper function for generating a sequence of unique ids
     val nextId = {
-      var i = 100000; () => {
-        i += 1; i
+      var i = 100000;
+      () => {
+        i += 1;
+        i
       }
     }
 
@@ -493,7 +538,8 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
       val id = nextId()
       // and remove the nodes from the graph
       nodes.foreach { n => {
-        map += ((n, id)); graph -= n
+        map += ((n, id));
+        graph -= n
       }
       }
     }
