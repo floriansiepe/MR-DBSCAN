@@ -398,7 +398,7 @@ class PlainSpatialRDDFunctions[G <: STObject : ClassTag, V: ClassTag](
 	  }
 
 	  // start the DBScan computation
-	  val model = dbscan.run(r)
+	  val (model,_) = dbscan.run(r)
 
 	  /*
 	   * Finally, transform into a form that corresponds to a spatial RDD

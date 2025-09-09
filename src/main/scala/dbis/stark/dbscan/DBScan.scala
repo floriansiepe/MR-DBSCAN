@@ -52,16 +52,19 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
   /*                                                                                                     */
   /*-----------------------------------------------------------------------------------------------------*/
 
-  def run(input: RDD[(K, Vector, T)]): DBScanModel[K, T] = {
+  def run(input: RDD[(K, Vector, T)]): (DBScanModel[K, T], Map[String, Long]) = {
     /*
      * step 1: determine the optimal partitioning, i.e. a list of MBBs describing the
      *         partitions in the n-dimensional space and send it around as broadcast
      *         variable
      */
     logger.info(s"DBScan: run with eps=$eps, minPts=$minPts, ppd=$ppd, maxPartitionSize=$maxPartitionSize")
+    val start = System.currentTimeMillis()
     val globalMBB = getGlobalMBB(input.map { case (_, v, _) => v })
     val data = input.map { case (id, v, p) => new ClusterPoint(id, v, payload = Some(p)) }
-    performClustering(data, globalMBB)
+    val (model, timings) = performClustering(data, globalMBB)
+    val end = System.currentTimeMillis()
+    (model, timings + ("total" -> (end - start)))
   }
 
   /**
@@ -106,7 +109,8 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
    * @param input the input RDD consisting of Vectors (of an arbitrary number of dimensions)
    * @return a clustering model containing the objects with their cluster id as label
    */
-  private def performClustering(input: RDD[ClusterPoint[K, T]], globalMBB: MBB): DBScanModel[K, T] = {
+  private def performClustering(input: RDD[ClusterPoint[K, T]], globalMBB: MBB): (DBScanModel[K, T], Map[String, Long]) = {
+    val timings = mutable.Map[String, Long]()
     /*
      * step 1: determine the optimal partitioning, i.e. a list of MBBs describing the
      *         partitions in the n-dimensional space and send it around as broadcast
@@ -119,28 +123,39 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
     val partitioner = new GridPartitioner().setMBB(globalMBB).setPPD(4)
     val partitionMBBs = partitioner.computePartitioning()
     */
+    val startPartitioning = System.currentTimeMillis()
     val partitionMBBs = computePartitioning(globalMBB, input)
+    val endPartitioning = System.currentTimeMillis()
+    timings("compute_partitions") = endPartitioning - startPartitioning
     logger.info(s"number of partitions: ${partitionMBBs.length}")
     // sc.parallelize(partitionMBBs, 1).saveAsTextFile("mbb")
 
     // we expand all partitions by epsilon
+    val startExpandingPartitions = System.currentTimeMillis()
     partitionMBBs.foreach(mbb => mbb.expand(eps))
+    val endExpandingPartitions = System.currentTimeMillis()
+    timings("expanding_partitions") = endExpandingPartitions - startExpandingPartitions
     val broadcastMBBs = input.sparkContext.broadcast(partitionMBBs)
 
     /*
      * step 2: assign the points to their partition
      */
     logger.info("step 2: partitioning the input")
+    val startPartitioningInput = System.currentTimeMillis()
     val mappedPoints = partitionInput(input, partitionMBBs)
+    val endPartitioningInput = System.currentTimeMillis()
 
     /*
      * step 3: in each partition we perform DBSCAN
      */
     logger.info("step 3: start local DBSCAN")
+    val startLocalDBScan = System.currentTimeMillis()
     val clusterSets = mappedPoints.groupBy(k => k._1) //FIXME reduceByKey?
     // TODO: try .repartition(partitionMBBs.length)
     val clusterResults = clusterSets.mapPartitions(iter => applyLocalDBScan(iter, broadcastMBBs.value), preservesPartitioning = true)
     val clusteredData = clusterResults.flatMap { case (_, x) => x }
+    val endLocalDBScan = System.currentTimeMillis()
+    timings("local_dbscan") = endLocalDBScan - startLocalDBScan
 
     /*
      * we need the data twice, so let's cache them.
@@ -154,6 +169,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
     *         for this purpose we have to consider only merge candidates
     */
     logger.info("step 4: determine merge points")
+    val startFindMergePoints = System.currentTimeMillis()
     val clusterGroups = clusteredData.filter(p => p.isMerge)
       .map(point => (point.vec, point)).groupByKey()
 
@@ -176,13 +192,17 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
      * if a point appears in multiple partitions we take only one instance of it
      */
     val mergedPoints = clusterGroups.mapPartitions { iter => eliminateDuplicates(iter) }
+    val endFindMergePoints = System.currentTimeMillis()
+    timings("find_merge_points") = endFindMergePoints - startFindMergePoints
 
     /*
      * step 5: we calculate the transitive closure for global mapping and send it
      *         around as a broadcast variable
      */
     logger.info("step 5: compute global mapping")
+    val startGlobalMapping = System.currentTimeMillis()
     val globalClusterMap = computeGlobalMapping(clusterPairs)
+    val endGlobalMapping = System.currentTimeMillis()
     val broadcastMapping = input.sparkContext.broadcast(globalClusterMap)
 
     /*
@@ -190,19 +210,22 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
      *         points
      */
     logger.info("step 6: compute the final clustering")
+    val startComputeFinalClustering = System.currentTimeMillis()
     val finalClustering = clusteredData.filter(!_.isMerge)
       .union(mergedPoints)
       /*
        * step 7: we translate the cluster id of all points according the global map
        */
       .map { point => mapClusterId(point, broadcastMapping.value) }
+    val endComputeFinalClustering = System.currentTimeMillis()
+    timings("compute_final_clustering") = endComputeFinalClustering - startComputeFinalClustering
 
     /*
      * step 8: finally, we construct a clustering model
      */
     logger.info("step 7: construct clustering model")
     val partitionRDD = input.sparkContext.parallelize(partitionMBBs)
-    new DBScanModel(finalClustering, partitionRDD, distanceFun)
+    (new DBScanModel(finalClustering, partitionRDD, distanceFun), timings.toMap)
   }
 
   /*-----------------------------------------------------------------------------------------------------*/
@@ -329,7 +352,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
    * @param points    the list of points to be considered
    * @return true if p belongs to a cluster and isn't noise
    */
-  protected[dbscan] def expandCluster(p: ClusterPoint[K, T], clusterID: Int, points: Stream[ClusterPoint[K, T]]): Boolean = {
+  protected[dbscan] def expandCluster(p: ClusterPoint[K, T], clusterID: Int, points: LazyList[ClusterPoint[K, T]]): Boolean = {
     // we consider only points within the eps distance
     var seeds = points.filter(l => distanceFun(p.vec, l.vec) < eps).toBuffer
 
@@ -373,7 +396,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
    * @param startId the first available cluster identifier
    * @return the list of clustered points (i.e. label and clusterId are set now)
    */
-  protected[dbscan] def localDBScan(points: Stream[ClusterPoint[K, T]], startId: Int): Stream[ClusterPoint[K, T]] = {
+  protected[dbscan] def localDBScan(points: LazyList[ClusterPoint[K, T]], startId: Int): LazyList[ClusterPoint[K, T]] = {
     // prepare the next available cluster id
     var nextClusterID: Int = startId + 1
 
@@ -394,7 +417,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
     id.toString.hashCode.toLong
   }
 
-  protected[dbscan] def localDBScanGrid(points: Stream[ClusterPoint[K, T]], startId: Int): Stream[ClusterPoint[K, T]] = {
+  protected[dbscan] def localDBScanGrid(points: LazyList[ClusterPoint[K, T]], startId: Int): LazyList[ClusterPoint[K, T]] = {
     val pointsMap = points.map(p => {
       val longId = hashIdToLong(p.id)
       (longId -> p)
@@ -428,7 +451,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
         ClusterPoint(originalPoint, pload = originalPoint.payload, merge = originalPoint.isMerge)
       }
     }
-    clusterPoints.to(Stream)
+    clusterPoints.to(LazyList)
   }
 
   /**
@@ -449,7 +472,7 @@ class DBScan[K, T: ClassTag](var eps: Double = 0.1, var minPts: Int = 10) extend
       // determine a new starting cluster id for the partition
       // here we assume to not having more than 1000 clusters
       val startId = partitionId * 1000
-      val points = objIter.map(_._2).toStream
+      val points = objIter.map(_._2).to(LazyList)
 
       // perform the actual clustering
       val data = localDBScan(points, startId)

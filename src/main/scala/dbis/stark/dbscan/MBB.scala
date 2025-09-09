@@ -18,9 +18,11 @@ case class MBB(minVec: Vector, maxVec: Vector) {
   def expand(eps: Double): MBB = {
     val v1 = this.minVec.toArray
     val v2 = this.maxVec.toArray
-    for (i <- v1.indices) v1(i) -= eps
-    for (i <- v2.indices) v2(i) += eps
-    this
+    var i = 0
+    while(i < v1.length) { v1(i) -= eps; i += 1 }
+    i = 0
+    while(i < v2.length) { v2(i) += eps; i += 1 }
+    MBB(Vectors.dense(v1), Vectors.dense(v2))
   }
 
   /**

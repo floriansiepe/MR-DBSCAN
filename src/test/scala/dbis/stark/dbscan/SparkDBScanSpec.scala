@@ -64,7 +64,7 @@ class SparkDBScanSpec extends FlatSpec with Matchers with BeforeAndAfter {
       .zipWithUniqueId()
       .map{ case (t, id) => (id, Vectors.dense(t(0).toDouble, t(1).toDouble), List(t(2))) }
 
-    val model = dbscan.run(data)
+    val (model, _) = dbscan.run(data)
     model.points.coalesce(1).saveAsTextFile("grid-results")
     model.mbbs.coalesce(1).saveAsTextFile("grid-mbbs")
 
@@ -91,7 +91,7 @@ class SparkDBScanSpec extends FlatSpec with Matchers with BeforeAndAfter {
       .zipWithUniqueId()
       .map{ case (t,id) => (id,Vectors.dense(t(0).toDouble, t(1).toDouble), List(t(2)))}
 
-    val model = dbscan.run(data)
+    val (model, _) = dbscan.run(data)
     model.points.coalesce(1).saveAsTextFile("bsp-results")
     model.mbbs.coalesce(1).saveAsTextFile("bsp-mbbs")
 
