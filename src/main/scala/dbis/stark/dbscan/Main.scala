@@ -1,9 +1,11 @@
 package dbis.stark.dbscan
 
+import metrics.MetricWriter
+import metrics.entity.{ClusterParameters, DatasetParameters, Measurement}
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.mllib.linalg.Vectors
+import org.apache.spark.{SparkConf, SparkContext}
 
 import scala.util.Using
 //import org.apache.log4j.Logger
@@ -14,7 +16,8 @@ case class DBSCANConfig(input: java.net.URI = new java.net.URI("."),
                         minPts: Int = 10,
                         ppd: Int = 0,
                         maxPSize: Int = 100,
-                        numDimensions: Int = -1)
+                        numDimensions: Int = -1,
+                        metricsPath: String = "")
 
 /**
  * Start with:
@@ -33,6 +36,7 @@ object Main {
     var ppd: Int = 0
     var maxPartitionSize: Int = 100
     var numDimensions: Int = -1
+    var metricsPath: String = ""
 
     //    val log = Logger.getLogger(getClass.getName)
 
@@ -45,6 +49,7 @@ object Main {
       opt[Int]("ppd") action { (x, c) => c.copy(ppd = x) } text ("partitions per dimension (enforces grid partitioning)")
       opt[Int]('s', "maxPartitionSize") action { (x, c) => c.copy(maxPSize = x) } text ("maximum partition size (enforces binary space partitioning)")
       opt[Int]('n', "ndims") action { (x, c) => c.copy(numDimensions = x) } text ("number of dimensions (fields considered for clustering, default = all fields)")
+      opt[String]('M', "metricsPath") action { (x, c) => c.copy(metricsPath = x) } text ("directory to store experiment results")
       help("help") text ("prints this usage text")
     }
 
@@ -69,7 +74,8 @@ object Main {
     val sc = new SparkContext(conf)
 
     val msg = if (numDimensions == -1) {
-      numDimensions = 20; "all"
+      numDimensions = 20;
+      "all"
     } else numDimensions
     //    log.info(s"starting DBSCAN with eps=$eps, minPts=$minPts on $msg dimensions of file '${inputFile.toString}'")
 
@@ -77,15 +83,17 @@ object Main {
 
     if (ppd > 0) dbscan.setPPD(ppd) else dbscan.setMaxPartitionSize(maxPartitionSize)
 
-    val data = sc.textFile(inputFile.toString(), 3 * sc.defaultParallelism)
+    val data = sc.textFile(inputFile.toString, 3 * sc.defaultParallelism)
       // Skip header line
       .filter(line => !line.startsWith("dim"))
       .map(line => line.split(",").slice(0, numDimensions).map(_.toDouble))
       .zipWithIndex // to create a unique key for each entry - this triggers a spark job if there is more than one partition
       .map { case (t, i) => (i, Vectors.dense(t), 1) }
+      .cache()
+    println(data.count().toString + " points loaded.")
 
     val (model, timings) = dbscan.run(data)
-    val outputPath = new Path(outputFile.toString())
+    val outputPath = new Path(outputFile.toString)
     val fs = FileSystem.get(new Configuration())
     if (fs.exists(outputPath)) {
       fs.delete(outputPath, true)
@@ -101,7 +109,25 @@ object Main {
       os.write(values.getBytes("UTF-8"))
     }
 
-    model.points.coalesce(1).saveAsTextFile(outputFile.toString())
+    model.points.coalesce(1).saveAsTextFile(outputFile.toString)
+
+    data.unpersist()
+
+    val durationMs = timings("total")
+    val writer = new MetricWriter(java.nio.file.Path.of(metricsPath))
+    val datasetName = inputFile.toString.split("/").last.split("\\.").head
+    val measurement = new Measurement[ClusterParameters, DatasetParameters](
+      "VoronoiSCAN",
+      durationMs,
+      new ClusterParameters(
+        eps.toFloat,
+        minPts
+      ),
+      new DatasetParameters(
+        datasetName
+      )
+    )
+    writer.writeMetrics(measurement)
 
     sc.stop()
   }
