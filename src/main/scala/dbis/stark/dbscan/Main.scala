@@ -27,7 +27,7 @@ case class DBSCANConfig(input: java.net.URI = new java.net.URI("."),
  *
  */
 object Main {
-  def main(args: Array[String]) {
+  def main(args: Array[String]): Unit = {
 
     var inputFile: java.net.URI = null
     var outputFile: java.net.URI = null
@@ -64,6 +64,7 @@ object Main {
         ppd = config.ppd
         maxPartitionSize = config.maxPSize
         numDimensions = config.numDimensions
+        metricsPath = config.metricsPath
       }
       case None =>
         // arguments are bad, error message will have been displayed

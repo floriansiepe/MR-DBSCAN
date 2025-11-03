@@ -20,10 +20,8 @@ DATASET=${1}
 DIM=${2}
 EPS=${3}
 MINPTS=${4}
-NUM_PARTITIONS=${5}
-EXP_DIR=${6}
-OUT=${7}
-RHO=${8}
+EXP_DIR=${5}
+OUT=${6}
 
 # Get SLURM and system information
 GLOBAL_RANK=$SLURM_PROCID
@@ -115,7 +113,7 @@ if [ $GLOBAL_RANK == 0 ]; then
       --deploy-mode client \
       --class dbis.stark.dbscan.Main \
       home/siepef/code/MR-DBSCAN/target/scala-2.13/mr-dbscan.jar \
-      -i "$DATASET" -o "$OUT" -rho "$RHO" -dim "$DIM" -eps "$EPS" -minPts "$MINPTS" -np "$NUM_PARTITIONS" -M "$EXP_DIR"
+      -i "$DATASET" -o "$OUT" -n "$DIM" --eps "$EPS" --minPts "$MINPTS" -M "$EXP_DIR"
 
     if [ $? -eq 0 ]; then
       echo "Success: Spark job completed."
