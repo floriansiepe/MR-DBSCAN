@@ -117,7 +117,7 @@ object Main {
     val writer = new MetricWriter(java.nio.file.Path.of(metricsPath))
     val datasetName = inputFile.toString.split("/").last.split("\\.").head
     val measurement = new Measurement[ClusterParameters, DatasetParameters](
-      "VoronoiSCAN",
+      "MR-DBSCAN",
       durationMs,
       new ClusterParameters(
         eps.toFloat,
