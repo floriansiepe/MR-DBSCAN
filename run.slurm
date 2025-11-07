@@ -7,7 +7,7 @@
 #SBATCH --time=05:00:00
 #SBATCH --mail-user=siepef@uni-marburg.de
 #SBATCH --mail-type=END
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 
 # 1. Set up the environment
 # It's good practice to load the required Java module.
