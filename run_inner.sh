@@ -6,7 +6,7 @@
 module purge
 module load openjdk/21.0.2
 
-DATASET=$1; DIM=$2; EPS=$3; MINPTS=$4; NUM_PARTITIONS=$5; EXP_DIR=$6; OUT=$7; RHO=$8
+DATASET=$1; DIM=$2; EPS=$3; MINPTS=$4; EXP_DIR=$5; OUT=$6
 # Define JOBID early so SCRATCH_DIR expansion includes it
 JOBID=$SLURM_JOB_ID
 SCRATCH_DIR=${SCRATCH_DIR:-/scratch_shared/$USER/scratch-$JOBID}
@@ -98,7 +98,7 @@ $SPARK_HOME/sbin/start-worker.sh "spark://$MASTER_NODE_HOSTNAME:$SPARK_MASTER_PO
 SUBMIT_RC=0
 if [ "$GLOBAL_RANK" -eq 0 ]; then
   echo "[SUBMIT] spark-submit (executorMemory=$SPARK_EXECUTOR_MEMORY executorCores=$SPARK_EXECUTOR_CORES parallelism=$SPARK_DEFAULT_PARALLELISM instances=${SPARK_EXECUTOR_INSTANCES:-1})"
-  echo "[SUBMIT] Dataset=$DATASET Dim=$DIM Eps=$EPS MinPts=$MINPTS NumPartitions=$NUM_PARTITIONS ExpDir=$EXP_DIR Out=$OUT Rho=$RHO ScratchDir=$SCRATCH_DIR"
+  echo "[SUBMIT] Dataset=$DATASET Dim=$DIM Eps=$EPS MinPts=$MINPTS ExpDir=$EXP_DIR"
   $SPARK_HOME/bin/spark-submit \
     --master "spark://$MASTER_NODE_HOSTNAME:$SPARK_MASTER_PORT" \
     --deploy-mode client \
