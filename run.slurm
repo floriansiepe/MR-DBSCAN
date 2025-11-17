@@ -2,8 +2,8 @@
 #SBATCH --job-name=RpDBSCANJob
 #SBATCH --nodes=4
 #SBATCH --ntasks=4
-#SBATCH --cpus-per-task=32
-#SBATCH --output=rp-dbscan_output_%j.txt
+#SBATCH --cpus-per-task=16
+#SBATCH --output=mr-dbscan_output_%j.txt
 #SBATCH --time=05:00:00
 #SBATCH --mail-user=siepef@uni-marburg.de
 #SBATCH --mail-type=END
