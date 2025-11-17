@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=RpDBSCANJob
+#SBATCH --job-name=MrDbscanJob
 #SBATCH --nodes=4
 #SBATCH --ntasks=4
 #SBATCH --cpus-per-task=16
